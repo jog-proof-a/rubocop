@@ -21,6 +21,12 @@ rescue LoadError
   # Pry is not activated.
 end
 
+# Some specs run RuboCop in a subprocess, which on JRuby boots a new JVM. With JRuby's default
+# JIT and invokedynamic that boot is slow, and those few dozen examples made up a large share of
+# the JRuby spec run. `--dev` tunes JRuby for startup instead, making each subprocess about
+# 2.5 times faster. Only subprocesses see it, because this JVM is already running.
+ENV['JRUBY_OPTS'] = "#{ENV.fetch('JRUBY_OPTS', nil)} --dev".strip if RUBY_ENGINE == 'jruby'
+
 # NOTE: To avoid executing processes needed only for extension plugins in `rubocop/rspec/support`,
 # an environment variable is used to indicate that it is running in the RuboCop core development.
 ENV['RUBOCOP_CORE_DEVELOPMENT'] = 'true'
