@@ -16,7 +16,8 @@ concurrency:
 
 # `timeout-minutes` on each job is a guard against intermittent CI hangs:
 # a job hitting its limit is hung, not slow. A normal run finishes in about
-# 1-2 minutes on ubuntu, 4-5 minutes on Windows, and 15 minutes on JRuby.
+# 1-2 minutes on ubuntu, 4-5 minutes on Windows, and 15 minutes of JRuby specs
+# split across two jobs.
 jobs:
   spec-ubuntu:
     name: Spec - ubuntu ${{ matrix.ruby }}
@@ -43,9 +44,15 @@ jobs:
         run: bundle exec rake spec
 
   spec-jruby:
-    name: Spec - JRuby
+    name: Spec - JRuby ${{ matrix.shard }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        # JRuby can't fork, so its specs run in one process, which already keeps most of a
+        # runner's cores busy. Splitting the spec files across two jobs halves the wait.
+        shard: ['1/2', '2/2']
     steps:
       - uses: actions/checkout@v7
       - uses: ruby/setup-ruby@v1
@@ -53,6 +60,8 @@ jobs:
           ruby-version: 'jruby' # Latest stable JRuby version
           bundler-cache: true
       - name: spec
+        env:
+          RUBOCOP_SPEC_SHARD: ${{ matrix.shard }}
         run: bundle exec rake spec
 
   spec-windows:

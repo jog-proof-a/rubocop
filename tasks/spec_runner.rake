@@ -19,6 +19,8 @@ module RuboCop
   # different encoding than strings defined inside the block.
   # The specs will be run in parallel if the system implements `fork`.
   # If ENV['COVERAGE'] is truthy, code coverage will be measured.
+  # If ENV['RUBOCOP_SPEC_SHARD'] is set, such as to `1/2`, only that share of the spec files
+  # is run (see `SpecShard`).
   class SpecRunner
     include EncodingHelper
 
@@ -27,6 +29,9 @@ module RuboCop
     def initialize(rspec_args = %w[spec --force-color], parallel: true,
                    external_encoding: 'UTF-8', internal_encoding: nil)
       @rspec_args = ENV['GITHUB_ACTIONS'] == 'true' ? %w[spec --no-color] : rspec_args
+      if (shard = ENV.fetch('RUBOCOP_SPEC_SHARD', nil))
+        @rspec_args = SpecShard.parse(shard).rspec_args(@rspec_args)
+      end
 
       @temporary_external_encoding = external_encoding
       @temporary_internal_encoding = internal_encoding
@@ -58,6 +63,60 @@ module RuboCop
         ParallelCoverageRunner
       else
         ParallelRunner
+      end
+    end
+
+    # One of several shares of the spec files, so that a slow spec run (JRuby's, which can't
+    # fork) can be split across CI jobs. Every share is worked out from the same sorted list,
+    # so the shares of one checkout don't overlap and together hold every spec file.
+    class SpecShard
+      def self.parse(value)
+        index, count = value.split('/', 2).map { |number| Integer(number) }
+        unless count&.positive? && (1..count).cover?(index)
+          raise ArgumentError, "RUBOCOP_SPEC_SHARD must look like `1/2`, not `#{value}`"
+        end
+
+        new(index, count)
+      end
+
+      def initialize(index, count)
+        @index = index
+        @count = count
+      end
+
+      # The given RSpec arguments, with the files and directories to run replaced by
+      # this share's spec files.
+      def rspec_args(args)
+        options = ::RSpec::Core::ConfigurationOptions.new(args).options
+        paths = options.fetch(:files_or_directories_to_run, [])
+        files = split(spec_files(options, paths)).fetch(@index - 1)
+
+        args.reject { |arg| paths.include?(arg) } + files
+      end
+
+      private
+
+      def spec_files(options, paths)
+        config = ::RSpec::Core::Configuration.new
+        config.pattern = options[:pattern] if options[:pattern]
+        config.exclude_pattern = options[:exclude_pattern] if options[:exclude_pattern]
+        config.files_or_directories_to_run = paths
+        config.files_to_run.uniq
+      end
+
+      # A file's size is a rough guess at how long it takes, so each file, largest first,
+      # goes to the share with the fewest bytes so far.
+      def split(files)
+        shares = Array.new(@count) { [] }
+        sizes = Array.new(@count, 0)
+
+        files.sort_by { |file| [-File.size(file), file] }.each do |file|
+          smallest = sizes.index(sizes.min)
+          shares[smallest] << file
+          sizes[smallest] += File.size(file)
+        end
+
+        shares
       end
     end
 
